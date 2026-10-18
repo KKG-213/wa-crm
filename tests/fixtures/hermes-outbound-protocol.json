@@ -1,0 +1,5 @@
+{
+  "secret": "outbound-test-only-secret",
+  "raw": "{\"version\":1,\"phone_number_id\":\"1409792945541835\",\"recipient\":\"919000000001\",\"wamid\":\"wamid.outbound\",\"message_type\":\"text\",\"content\":\"नमस्ते 👋 Website demo\",\"sent_at\":\"2026-10-18T05:00:00.000Z\"}",
+  "signature": "sha256=eee60e664bd09e803420497d236f29f9c50d0eb926bf6957c2d5155c6425f770"
+}

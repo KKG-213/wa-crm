@@ -2,9 +2,9 @@ import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
 export async function middleware(request: NextRequest) {
-  // Meta uses a signature, not a browser cookie. Keep its callback independent
-  // of Supabase Auth availability; the route verifies X-Hub-Signature-256.
-  if (request.nextUrl.pathname === '/api/webhook') return NextResponse.next();
+  // These exact endpoints authenticate signed raw bodies, not browser cookies.
+  // Each handler verifies its own signature before creating a service client.
+  if (['/api/webhook', '/api/hermes/outbound'].includes(request.nextUrl.pathname)) return NextResponse.next();
   let supabaseResponse = NextResponse.next({ request });
 
   const supabase = createServerClient(

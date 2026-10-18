@@ -33,6 +33,7 @@ try {
   assert.equal(verify.status, 200); assert.equal(await verify.text(), 'hello');
   assert.equal((await local('/api/webhook?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=hello')).status, 403);
   assert.equal((await local('/api/webhook', { method: 'POST', body: '{}' })).status, 401);
+  assert.equal((await local('/api/hermes/outbound', { method: 'POST', body: '{}' })).status, 401);
   const payload = JSON.stringify({ object: 'whatsapp_business_account', entry: [{ id: 'wrong-waba', changes: [] }] });
   assert.equal((await local('/api/webhook', { method: 'POST', body: payload, headers: {
     'x-hub-signature-256': `sha256=${createHmac('sha256', secret).update(payload).digest('hex')}`,

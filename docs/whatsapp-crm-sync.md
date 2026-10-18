@@ -1,5 +1,8 @@
 # WhatsApp incoming sync patch
 
+For the subsequent Hermes outgoing-reply integration and early status-receipt
+reconciliation, see [Hermes outgoing sync](hermes-outbound-sync.md).
+
 This single-business CRM currently receives no customer webhook while Meta points
 at the separate Hermes gateway. This patch prepares the CRM to receive signed
 Meta events, persist them, and optionally forward allowed messages to Hermes.
