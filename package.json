@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "smoke": "node tests/production-smoke.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",
@@ -44,6 +47,7 @@
     "zustand": "^5.0.1"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.10",
     "@types/node": "^22.0.0",
     "@types/papaparse": "^5.3.14",
     "@types/react": "^19.0.0",

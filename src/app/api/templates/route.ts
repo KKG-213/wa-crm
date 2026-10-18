@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
 
 export async function GET() {
   try {
+    const sessionClient = await createClient();
+    const { data: { user }, error: authError } = await sessionClient.auth.getUser();
+    if (authError || !user) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
     const wabaId = process.env.META_WABA_ID;
     const accessToken = process.env.META_ACCESS_TOKEN;
 

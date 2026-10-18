@@ -1,7 +1,10 @@
-import { createServerClient } from '@supabase/ssr';
+import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
 export async function middleware(request: NextRequest) {
+  // Meta uses a signature, not a browser cookie. Keep its callback independent
+  // of Supabase Auth availability; the route verifies X-Hub-Signature-256.
+  if (request.nextUrl.pathname === '/api/webhook') return NextResponse.next();
   let supabaseResponse = NextResponse.next({ request });
 
   const supabase = createServerClient(
@@ -12,7 +15,7 @@ export async function middleware(request: NextRequest) {
         getAll() {
           return request.cookies.getAll();
         },
-        setAll(cookiesToSet: { name: string; value: string; options?: any }[]) {
+        setAll(cookiesToSet: { name: string; value: string; options: CookieOptions }[]) {
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value),
           );
@@ -32,6 +35,12 @@ export async function middleware(request: NextRequest) {
   const isAuthPage = request.nextUrl.pathname.startsWith('/auth');
   const isDashboard = request.nextUrl.pathname.startsWith('/dashboard');
   const isRoot = request.nextUrl.pathname === '/';
+
+  if (!user && request.nextUrl.pathname.startsWith('/api/')) {
+    const response = NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+    supabaseResponse.cookies.getAll().forEach((cookie) => response.cookies.set(cookie));
+    return response;
+  }
 
   if (!user && isDashboard) {
     const url = request.nextUrl.clone();

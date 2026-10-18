@@ -6,13 +6,14 @@ import { Contact, Message } from "@/types";
 import { formatRelativeTime, getInitials, cn } from "@/lib/utils";
 import { Send, Search, Loader2, MessageSquareOff } from "lucide-react";
 import { toast } from "sonner";
+import { mergeChatMessages } from "@/lib/merge-chat-messages";
 
 interface InboxClientProps {
   initialContacts: Contact[];
 }
 
 export function InboxClient({ initialContacts }: InboxClientProps) {
-  const supabase = createClient();
+  const [supabase] = useState(() => createClient());
   const [contacts, setContacts] = useState<Contact[]>(initialContacts);
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -27,62 +28,86 @@ export function InboxClient({ initialContacts }: InboxClientProps) {
     c.phone.includes(search)
   );
 
-  // Load messages when contact selected
+  const selectedContactId = selectedContact?.id;
+
+  // Realtime plus a visible-tab refresh if the socket reconnects or is blocked.
   useEffect(() => {
-    if (!selectedContact) return;
+    if (!selectedContactId) return;
+    let active = true;
+    let pending = false;
+    let duringFetch: Message[] = [];
+    setMessages([]);
     setLoadingMessages(true);
-
-    supabase
-      .from("messages")
-      .select("*")
-      .eq("contact_id", selectedContact.id)
-      .order("sent_at", { ascending: true })
-      .then(({ data }) => {
-        setMessages(data ?? []);
+    const refresh = async () => {
+      if (pending || !active) return;
+      pending = true;
+      duringFetch = [];
+      const { data, error } = await supabase.from("messages").select("*")
+        .eq("contact_id", selectedContactId).order("sent_at", { ascending: true });
+      if (active) {
+        if (error) toast.error("Unable to refresh this conversation");
+        else setMessages(mergeChatMessages(data ?? [], duringFetch));
         setLoadingMessages(false);
-        setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
-      });
-  }, [selectedContact]);
-
-  // Realtime subscription for new messages
-  useEffect(() => {
-    if (!selectedContact) return;
-
+      }
+      pending = false;
+    };
+    const onMessage = (payload: { new: unknown }) => {
+      if (!active) return;
+      const message = payload.new as Message;
+      if (pending) duringFetch.push(message);
+      setMessages((prev) => mergeChatMessages(prev, [message]));
+    };
     const channel = supabase
-      .channel(`messages:${selectedContact.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "messages",
-          filter: `contact_id=eq.${selectedContact.id}`,
-        },
-        (payload) => {
-          setMessages((prev) => [...prev, payload.new as Message]);
-          setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
-        }
-      )
-      .subscribe();
+      .channel(`messages:${selectedContactId}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages", filter: `contact_id=eq.${selectedContactId}` }, onMessage)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "messages", filter: `contact_id=eq.${selectedContactId}` }, onMessage)
+      .subscribe((status) => { if (status === "SUBSCRIBED") void refresh(); });
+    void refresh();
+    const visibleRefresh = () => { if (document.visibilityState === "visible") void refresh(); };
+    const interval = setInterval(visibleRefresh, 10000);
+    document.addEventListener("visibilitychange", visibleRefresh);
+    return () => {
+      active = false;
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", visibleRefresh);
+      void supabase.removeChannel(channel);
+    };
+  }, [selectedContactId, supabase]);
 
-    return () => { supabase.removeChannel(channel); };
-  }, [selectedContact]);
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.length]);
 
   // Realtime for contact list updates
   useEffect(() => {
+    let active = true;
+    let pending = false;
+    const refresh = async () => {
+      if (pending || !active) return;
+      pending = true;
+      const { data, error } = await supabase.from("contacts").select("*")
+        .order("last_message_at", { ascending: false, nullsFirst: false }).limit(50);
+      if (active && !error && data) {
+        setContacts(data);
+        setSelectedContact((current) => current ? data.find((contact) => contact.id === current.id) ?? current : null);
+      }
+      pending = false;
+    };
     const channel = supabase
       .channel("contacts:updates")
-      .on("postgres_changes", { event: "*", schema: "public", table: "contacts" }, (payload) => {
-        if (payload.eventType === "INSERT") {
-          setContacts((prev) => [payload.new as Contact, ...prev]);
-        } else if (payload.eventType === "UPDATE") {
-          setContacts((prev) => prev.map((c) => c.id === payload.new.id ? payload.new as Contact : c));
-        }
-      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "contacts" }, () => { void refresh(); })
       .subscribe();
-
-    return () => { supabase.removeChannel(channel); };
-  }, []);
+    void refresh();
+    const visibleRefresh = () => { if (document.visibilityState === "visible") void refresh(); };
+    const interval = setInterval(visibleRefresh, 10000);
+    document.addEventListener("visibilitychange", visibleRefresh);
+    return () => {
+      active = false;
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", visibleRefresh);
+      void supabase.removeChannel(channel);
+    };
+  }, [supabase]);
 
   const sendReply = async () => {
     if (!replyText.trim() || !selectedContact) return;
