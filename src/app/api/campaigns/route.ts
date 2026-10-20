@@ -1,18 +1,46 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
-import { sendWhatsAppTemplate } from "@/services/meta";
-import { SendCampaignPayload } from "@/types";
+import { getApprovedWhatsAppTemplates, sendWhatsAppTemplate } from "@/services/meta";
+import { buildTemplateComponents } from "@/lib/meta-template";
+import { normalizeCampaignPhone, validCampaignPhone } from "@/lib/campaign-contacts";
+import { z } from "zod";
+
+const payloadSchema = z.object({
+  campaign_name: z.string().trim().min(2).max(200), template_name: z.string().min(1).max(512),
+  template_language: z.string().min(1).max(32), header_image_url: z.string().max(4096).optional(),
+  header_values: z.array(z.string().max(1024)).max(20).optional(),
+  body_values: z.array(z.string().max(1024)).max(20).optional(),
+  contacts: z.array(z.object({ phone: z.string().max(100), name: z.string().max(300).optional(),
+    email: z.string().max(320).optional() })).min(1).max(1000),
+});
 
 export async function POST(req: NextRequest) {
   try {
-    const body: SendCampaignPayload = await req.json();
-    const { campaign_name, template_name, template_language, contacts } = body;
-
-    if (!campaign_name || !template_name || !contacts?.length) {
-      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
-    }
-
     const supabase = await createAdminClient();
+    const validation = payloadSchema.safeParse(await req.json());
+    if (!validation.success) return NextResponse.json({ error: "Check the campaign fields and contacts." }, { status: 400 });
+    const body = validation.data;
+    const { campaign_name, template_name, template_language } = body;
+    const contacts = [...new Map(body.contacts.map((contact) => {
+      const phone = normalizeCampaignPhone(contact.phone);
+      return [phone, { ...contact, phone }] as const;
+    })).values()];
+    if (contacts.some((contact) => !validCampaignPhone(contact.phone))) {
+      return NextResponse.json({ error: "A contact has an invalid phone format. Include its country code." }, { status: 400 });
+    }
+    let templates;
+    try { templates = await getApprovedWhatsAppTemplates(); }
+    catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to check the approved template" }, { status: 502 }); }
+    const template = templates.find((item) => item.name === template_name && item.language === template_language);
+    if (!template) return NextResponse.json({ error: "This approved template/language was not found. Refresh templates and select it again." }, { status: 400 });
+    let components;
+    try {
+      components = buildTemplateComponents(template, { headerImageUrl: body.header_image_url,
+        headerValues: body.header_values, bodyValues: body.body_values });
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : "Check template parameters" }, { status: 400 });
+    }
+    // All format checks finish before a campaign is created or any recipient is sent a message.
 
     // Create campaign
     const { data: campaign, error: campaignError } = await supabase
@@ -46,6 +74,7 @@ export async function POST(req: NextRequest) {
 
     let sentCount = 0;
     let failedCount = 0;
+    let firstError: string | null = null;
     const eligibleContacts = upsertedContacts.filter((contact) => contact.status === "active");
     const skippedCount = upsertedContacts.length - eligibleContacts.length;
 
@@ -61,7 +90,8 @@ export async function POST(req: NextRequest) {
       const { ok, wamid, error } = await sendWhatsAppTemplate(
         contact.phone,
         template_name,
-        template_language
+        template_language,
+        components
       );
 
       await supabase.from("campaign_logs").insert({
@@ -78,6 +108,7 @@ export async function POST(req: NextRequest) {
         campaign_id: campaign.id,
         wamid: wamid ?? null,
         direction: "outbound",
+        media_url: body.header_image_url || null,
         content: `📢 ${campaign_name} — Template: ${template_name}`,
         status: ok ? "sent" : "failed",
         sent_at: new Date().toISOString(),
@@ -91,6 +122,7 @@ export async function POST(req: NextRequest) {
           .eq("id", contact.id);
       } else {
         failedCount++;
+        firstError ??= error ?? "Meta did not accept this message";
         console.error("Campaign message send failed");
       }
     }
@@ -106,7 +138,8 @@ export async function POST(req: NextRequest) {
       })
       .eq("id", campaign.id);
 
-    return NextResponse.json({ success: true, campaign_id: campaign.id, sent: sentCount, failed: failedCount,
+    return NextResponse.json({ success: sentCount > 0 && failedCount === 0, campaign_id: campaign.id, sent: sentCount, failed: failedCount,
+      first_error: firstError,
       skipped: skippedCount + eligibleContacts.length - sentCount - failedCount });
   } catch (err) {
     console.error("Campaign error:", err);

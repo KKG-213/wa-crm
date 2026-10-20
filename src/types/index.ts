@@ -87,12 +87,17 @@ export interface WhatsAppTemplate {
   name: string;
   language: string;
   display_name: string;
+  components: import("@/lib/meta-template").TemplateDefinition["components"];
+  parameter_format?: string;
 }
 
 export interface SendCampaignPayload {
   campaign_name: string;
   template_name: string;
   template_language: string;
+  header_image_url?: string;
+  header_values?: string[];
+  body_values?: string[];
   contacts: ParsedContact[];
 }
 

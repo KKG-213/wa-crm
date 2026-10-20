@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { normalizeCampaignPhone, validCampaignPhone } from "@/lib/campaign-contacts";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -63,15 +64,11 @@ export function getInitials(name: string | null, phone: string): string {
 }
 
 export function parsePhoneFromExcel(raw: string | number): string {
-  const str = String(raw).replace(/\D/g, "");
-  if (str.startsWith("91") && str.length === 12) return `+${str}`;
-  if (str.length === 10) return `+91${str}`;
-  return `+${str}`;
+  return normalizeCampaignPhone(raw);
 }
 
 export function isValidPhone(phone: string): boolean {
-  const cleaned = phone.replace(/\D/g, "");
-  return cleaned.length >= 10 && cleaned.length <= 15;
+  return validCampaignPhone(phone);
 }
 
 export function sleep(ms: number) {

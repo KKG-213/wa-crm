@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { Upload, Send, X, Loader2, FileSpreadsheet, Plus, CheckCircle2, RefreshCw } from "lucide-react";
 import { ParsedContact, WhatsAppTemplate } from "@/types";
 import { parsePhoneFromExcel, isValidPhone } from "@/lib/utils";
+import { buildTemplateComponents, templateRequirements } from "@/lib/meta-template";
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
 
@@ -15,6 +16,9 @@ const schema = z.object({
   campaign_name: z.string().min(2, "Campaign name required"),
   template_name: z.string().min(1, "Select a template"),
   template_language: z.string().min(1),
+  header_image_url: z.string().optional(),
+  header_values: z.array(z.string()).optional(),
+  body_values: z.array(z.string()).optional(),
 });
 
 type FormData = z.infer<typeof schema>;
@@ -26,6 +30,7 @@ export function CampaignSender() {
   const [step, setStep] = useState<"form" | "preview" | "success">("form");
   const [templates, setTemplates] = useState<WhatsAppTemplate[]>([]);
   const [loadingTemplates, setLoadingTemplates] = useState(false);
+  const [result, setResult] = useState<{ sent: number; failed: number; skipped: number; first_error?: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const { register, handleSubmit, watch, setValue, reset, formState: { errors } } = useForm<FormData>({
@@ -34,21 +39,29 @@ export function CampaignSender() {
   });
 
   const templateName = watch("template_name");
+  const templateLanguage = watch("template_language");
+  const headerImageUrl = watch("header_image_url");
+  const selectedTemplate = templates.find((template) => template.name === templateName && template.language === templateLanguage);
+  let requirements = { headerFormat: "NONE", headerCount: 0, bodyCount: 0 };
+  let templateError = "";
+  if (selectedTemplate) {
+    try { requirements = templateRequirements(selectedTemplate); }
+    catch (error) { templateError = error instanceof Error ? error.message : "Unsupported template format"; }
+  }
 
   const fetchTemplates = async () => {
     setLoadingTemplates(true);
     try {
       const res = await fetch("/api/templates");
-      if (!res.ok) throw new Error("Failed to fetch templates");
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to fetch templates");
       setTemplates(data);
       if (data.length === 0) {
         toast.warning("No approved templates found. Get a template approved in Meta Business Manager first.");
       }
-    } catch {
-      toast.error("Could not load templates. Check META_WABA_ID in your env.");
-      // Fallback to hello_world
-      setTemplates([{ name: "hello_world", language: "en_US", display_name: "Hello World" }]);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not load approved templates");
+      setTemplates([]);
     } finally {
       setLoadingTemplates(false);
     }
@@ -103,6 +116,11 @@ export function CampaignSender() {
       toast.error("Upload a contacts file first");
       return;
     }
+    if (!selectedTemplate) { toast.error("Select an approved template and language."); return; }
+    try {
+      buildTemplateComponents(selectedTemplate, { headerImageUrl: data.header_image_url,
+        headerValues: data.header_values, bodyValues: data.body_values });
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Check template fields"); return; }
     if (step === "form") {
       setStep("preview");
       return;
@@ -117,23 +135,20 @@ export function CampaignSender() {
           campaign_name: data.campaign_name,
           template_name: data.template_name,
           template_language: data.template_language,
+          header_image_url: data.header_image_url,
+          header_values: data.header_values,
+          body_values: data.body_values,
           contacts,
         }),
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error ?? "Failed to send campaign");
-      }
-
+      const outcome = await res.json();
+      if (!res.ok) throw new Error(outcome.error ?? "Failed to send campaign");
+      setResult(outcome);
       setStep("success");
-      toast.success("Campaign sent successfully!");
-      setTimeout(() => {
-        setOpen(false);
-        reset();
-        setContacts([]);
-        setStep("form");
-      }, 2000);
+      if (outcome.failed) toast.error(outcome.first_error ?? `${outcome.failed} messages failed`);
+      else if (outcome.sent) toast.success(`${outcome.sent} messages accepted for sending`);
+      else toast.warning("No messages sent. Contacts may be blocked or inactive.");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Something went wrong");
     } finally {
@@ -146,6 +161,7 @@ export function CampaignSender() {
     reset();
     setContacts([]);
     setStep("form");
+    setResult(null);
   };
 
   return (
@@ -166,7 +182,7 @@ export function CampaignSender() {
             <div className="flex items-center justify-between p-6 border-b border-border">
               <div>
                 <h2 className="text-base font-semibold text-foreground">
-                  {step === "success" ? "Campaign Sent!" : step === "preview" ? "Review & Send" : "New Campaign"}
+                  {step === "success" ? "Campaign results" : step === "preview" ? "Review & Send" : "New Campaign"}
                 </h2>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   {step === "preview" ? `${contacts.length} contacts ready` : "Upload contacts and choose template"}
@@ -179,14 +195,18 @@ export function CampaignSender() {
 
             {step === "success" ? (
               <div className="flex flex-col items-center justify-center py-16">
-                <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
-                  <CheckCircle2 className="w-8 h-8 text-primary" />
+                <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 ${result?.failed ? "bg-destructive/10" : "bg-primary/10"}`}>
+                  {result?.failed ? <X className="w-8 h-8 text-destructive" /> : <CheckCircle2 className="w-8 h-8 text-primary" />}
                 </div>
-                <p className="text-base font-semibold text-foreground">Campaign sent!</p>
-                <p className="text-sm text-muted-foreground mt-1">Messages delivered successfully.</p>
+                <p className="text-base font-semibold text-foreground">{result?.failed ? "Campaign has failed messages" : "Campaign processed"}</p>
+                <p className="text-sm text-muted-foreground mt-1">Sent: {result?.sent ?? 0} · Failed: {result?.failed ?? 0} · Skipped: {result?.skipped ?? 0}</p>
+                {result?.first_error && <p className="text-sm text-destructive mt-3 px-6 break-words">{result.first_error}</p>}
+                <p className="text-xs text-muted-foreground mt-3 px-6 text-center">Delivery and read status will update when WhatsApp sends receipts.</p>
               </div>
             ) : (
               <form onSubmit={handleSubmit(onSubmit)} className="p-6 space-y-5">
+                <input type="hidden" {...register("template_name")} />
+                <input type="hidden" {...register("template_language")} />
                 {step === "form" && (
                   <>
                     {/* Campaign Name */}
@@ -222,17 +242,20 @@ export function CampaignSender() {
                         </div>
                       ) : (
                         <select
-                          {...register("template_name")}
+                          value={templateName && templateLanguage ? `${templateName}:${templateLanguage}` : ""}
                           onChange={(e) => {
-                            const t = templates.find((t) => t.name === e.target.value);
-                            setValue("template_name", e.target.value);
-                            if (t) setValue("template_language", t.language);
+                            const t = templates.find((t) => `${t.name}:${t.language}` === e.target.value);
+                            setValue("template_name", t?.name ?? "", { shouldValidate: true });
+                            setValue("template_language", t?.language ?? "");
+                            setValue("header_values", []); setValue("body_values", []);
+                            setValue("header_image_url", t?.name === "web_design_request" && t.components.some((c) => c.type === "HEADER" && c.format === "IMAGE")
+                              ? `${window.location.origin}/whatsapp/web_design_request.png` : "");
                           }}
                           className="w-full px-3 py-2.5 bg-background border border-input rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                         >
                           <option value="">Select a template</option>
                           {templates.map((t) => (
-                            <option key={`${t.name}-${t.language}`} value={t.name}>
+                            <option key={`${t.name}-${t.language}`} value={`${t.name}:${t.language}`}>
                               {t.display_name} ({t.language})
                             </option>
                           ))}
@@ -240,6 +263,26 @@ export function CampaignSender() {
                       )}
                       {errors.template_name && <p className="text-xs text-destructive">{errors.template_name.message}</p>}
                     </div>
+
+                    {templateError && <p className="text-sm text-destructive">{templateError}</p>}
+                    {requirements.headerCount + requirements.bodyCount > 0 && <p className="text-xs text-muted-foreground">These variable values are used for every contact in this campaign.</p>}
+                    {requirements.headerFormat === "IMAGE" && (
+                      <div className="space-y-1.5">
+                        <label htmlFor="header-image" className="text-sm font-medium text-foreground">Header image URL</label>
+                        <input id="header-image" type="url" {...register("header_image_url")}
+                          placeholder="https://your-site.com/poster.png"
+                          className="w-full px-3 py-2.5 bg-background border border-input rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+                        <p className="text-xs text-muted-foreground">Use a PNG or JPEG that opens without signing in. This image will be sent with your template.</p>
+                      </div>
+                    )}
+                    {([['header_values', requirements.headerCount, 'Header'], ['body_values', requirements.bodyCount, 'Body']] as const).flatMap(([field, count, label]) =>
+                      Array.from({ length: count }, (_, index) => (
+                        <div key={`${field}-${index}`} className="space-y-1.5">
+                          <label htmlFor={`${field}-${index}`} className="text-sm font-medium text-foreground">{label} variable {`{{${index + 1}}}`}</label>
+                          <input id={`${field}-${index}`} {...register(`${field}.${index}`)}
+                            className="w-full px-3 py-2.5 bg-background border border-input rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-ring" />
+                        </div>
+                      ))) }
 
                     {/* File Upload */}
                     <div className="space-y-1.5">
@@ -278,11 +321,19 @@ export function CampaignSender() {
                         onChange={(e) => { if (e.target.files?.[0]) handleFile(e.target.files[0]); }}
                       />
                     </div>
+
                   </>
                 )}
 
                 {step === "preview" && (
                   <div className="space-y-4">
+                    {requirements.headerFormat === "IMAGE" && headerImageUrl && (
+                      <div className="space-y-2">
+                        <p className="text-sm font-medium">Header image</p>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={headerImageUrl} alt="Campaign header preview" className="w-full max-h-64 object-contain rounded-xl border border-border" />
+                      </div>
+                    )}
                     <div className="bg-muted/40 rounded-xl p-4 space-y-2">
                       <div className="flex justify-between text-sm">
                         <span className="text-muted-foreground">Template</span>
@@ -333,7 +384,7 @@ export function CampaignSender() {
                   )}
                   <button
                     type="submit"
-                    disabled={sending || loadingTemplates}
+                    disabled={sending || loadingTemplates || !!templateError || !selectedTemplate}
                     className="flex-1 py-2.5 bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium rounded-xl transition-all disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     {sending ? (

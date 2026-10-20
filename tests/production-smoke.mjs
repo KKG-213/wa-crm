@@ -42,6 +42,10 @@ try {
     assert.equal((await local(path)).status, 401, `${path} must require login`);
   }
   assert.equal((await local('/api/campaigns', { method: 'POST', body: '{}' })).status, 401);
+  const poster = await local('/whatsapp/web_design_request.png');
+  assert.equal(poster.status, 200, 'Meta must reach the poster without a login cookie');
+  assert.match(poster.headers.get('content-type'), /image\/png/);
+  assert.ok((await poster.arrayBuffer()).byteLength > 1000);
   const dashboard = await local('/dashboard');
   assert.equal(dashboard.status, 307); assert.match(dashboard.headers.get('location'), /\/auth\/login$/);
   console.log('Production smoke passed: middleware registered, webhook challenge/signatures checked, private APIs and dashboard require login.');
