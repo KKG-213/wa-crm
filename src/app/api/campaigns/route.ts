@@ -41,6 +41,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: error instanceof Error ? error.message : "Check template parameters" }, { status: 400 });
     }
     // All format checks finish before a campaign is created or any recipient is sent a message.
+    const { data: deliveryVersion, error: deliverySetupError } = await supabase.rpc("whatsapp_delivery_sync_version");
+    if (deliverySetupError || deliveryVersion !== 1) {
+      return NextResponse.json({ error: "Apply database/whatsapp-delivery-errors.sql before sending campaigns." }, { status: 503 });
+    }
 
     // Create campaign
     const { data: campaign, error: campaignError } = await supabase
@@ -94,7 +98,7 @@ export async function POST(req: NextRequest) {
         components
       );
 
-      await supabase.from("campaign_logs").insert({
+      const { error: logError } = await supabase.from("campaign_logs").insert({
         campaign_id: campaign.id,
         contact_id: contact.id,
         wamid: wamid ?? null,
@@ -102,8 +106,9 @@ export async function POST(req: NextRequest) {
         error_message: error ?? null,
         sent_at: new Date().toISOString(),
       });
+      if (logError) throw new Error("Message attempted, but its campaign record could not be saved. Check delivery before retrying.");
 
-      await supabase.from("messages").insert({
+      const { error: messageError } = await supabase.from("messages").insert({
         contact_id: contact.id,
         campaign_id: campaign.id,
         wamid: wamid ?? null,
@@ -113,6 +118,7 @@ export async function POST(req: NextRequest) {
         status: ok ? "sent" : "failed",
         sent_at: new Date().toISOString(),
       });
+      if (messageError) throw new Error("Message attempted, but its chat record could not be saved. Check delivery before retrying.");
 
       if (ok) {
         sentCount++;
@@ -127,16 +133,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    await supabase
-      .from("campaigns")
-      .update({
-        status: failedCount > 0 && sentCount === 0 ? "failed" : "completed",
-        total_contacts: sentCount + failedCount,
-        sent_count: sentCount,
-        failed_count: failedCount,
-        completed_at: new Date().toISOString(),
-      })
-      .eq("id", campaign.id);
+    // Receipts may arrive during the loop. Finalize from persisted logs under
+    // a database lock instead of overwriting delivery failures with local totals.
+    const { error: finishError } = await supabase.rpc("finish_whatsapp_campaign", { p_campaign_id: campaign.id });
+    if (finishError) throw new Error("Messages attempted, but campaign totals could not be finalized. Refresh before retrying.");
 
     return NextResponse.json({ success: sentCount > 0 && failedCount === 0, campaign_id: campaign.id, sent: sentCount, failed: failedCount,
       first_error: firstError,

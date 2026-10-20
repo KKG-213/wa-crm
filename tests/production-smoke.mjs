@@ -38,7 +38,7 @@ try {
   assert.equal((await local('/api/webhook', { method: 'POST', body: payload, headers: {
     'x-hub-signature-256': `sha256=${createHmac('sha256', secret).update(payload).digest('hex')}`,
   } })).status, 403);
-  for (const path of ['/api/contacts', '/api/messages', '/api/campaigns', '/api/analytics', '/api/templates']) {
+  for (const path of ['/api/contacts', '/api/messages', '/api/campaigns', '/api/campaigns/00000000-0000-4000-8000-000000000000', '/api/analytics', '/api/templates']) {
     assert.equal((await local(path)).status, 401, `${path} must require login`);
   }
   assert.equal((await local('/api/campaigns', { method: 'POST', body: '{}' })).status, 401);

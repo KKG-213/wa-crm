@@ -41,13 +41,13 @@ export async function RecentCampaigns() {
               <div className="flex items-center gap-6 ml-4">
                 <div className="text-right hidden sm:block">
                   <p className="text-sm font-medium text-foreground">{campaign.sent_count}</p>
-                  <p className="text-xs text-muted-foreground">sent</p>
+                  <p className="text-xs text-muted-foreground">accepted</p>
                 </div>
                 <div className="text-right hidden sm:block">
                   <p className="text-sm font-medium text-primary">{campaign.delivered_count}</p>
                   <p className="text-xs text-muted-foreground">delivered</p>
                 </div>
-                <CampaignStatusBadge status={campaign.status} />
+                <CampaignStatusBadge campaign={campaign} />
               </div>
             </div>
           ))}

@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
 
+export const dynamic = 'force-dynamic';
+
 type RouteContext = {
   params: Promise<{
     id: string;
@@ -49,7 +51,7 @@ export async function GET(req: Request, context: RouteContext) {
     return NextResponse.json({
       campaign,
       logs: logs ?? [],
-    });
+    }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (err) {
     console.error(err);
 

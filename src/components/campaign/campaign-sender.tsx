@@ -11,6 +11,7 @@ import { parsePhoneFromExcel, isValidPhone } from "@/lib/utils";
 import { buildTemplateComponents, templateRequirements } from "@/lib/meta-template";
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
+import { useRouter } from "next/navigation";
 
 const schema = z.object({
   campaign_name: z.string().min(2, "Campaign name required"),
@@ -24,6 +25,7 @@ const schema = z.object({
 type FormData = z.infer<typeof schema>;
 
 export function CampaignSender() {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [contacts, setContacts] = useState<ParsedContact[]>([]);
   const [sending, setSending] = useState(false);
@@ -146,6 +148,7 @@ export function CampaignSender() {
       if (!res.ok) throw new Error(outcome.error ?? "Failed to send campaign");
       setResult(outcome);
       setStep("success");
+      router.refresh();
       if (outcome.failed) toast.error(outcome.first_error ?? `${outcome.failed} messages failed`);
       else if (outcome.sent) toast.success(`${outcome.sent} messages accepted for sending`);
       else toast.warning("No messages sent. Contacts may be blocked or inactive.");
@@ -199,9 +202,9 @@ export function CampaignSender() {
                   {result?.failed ? <X className="w-8 h-8 text-destructive" /> : <CheckCircle2 className="w-8 h-8 text-primary" />}
                 </div>
                 <p className="text-base font-semibold text-foreground">{result?.failed ? "Campaign has failed messages" : "Campaign processed"}</p>
-                <p className="text-sm text-muted-foreground mt-1">Sent: {result?.sent ?? 0} · Failed: {result?.failed ?? 0} · Skipped: {result?.skipped ?? 0}</p>
+                <p className="text-sm text-muted-foreground mt-1">Accepted: {result?.sent ?? 0} · Rejected: {result?.failed ?? 0} · Skipped: {result?.skipped ?? 0}</p>
                 {result?.first_error && <p className="text-sm text-destructive mt-3 px-6 break-words">{result.first_error}</p>}
-                <p className="text-xs text-muted-foreground mt-3 px-6 text-center">Delivery and read status will update when WhatsApp sends receipts.</p>
+                <p className="text-xs text-muted-foreground mt-3 px-6 text-center">Acceptance does not confirm delivery. Close this dialog, then use Refresh and View delivery to check WhatsApp receipts.</p>
               </div>
             ) : (
               <form onSubmit={handleSubmit(onSubmit)} className="p-6 space-y-5">

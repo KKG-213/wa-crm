@@ -18,7 +18,7 @@ const envelopeSchema = z.object({
 }).passthrough();
 
 export type InboundMessage = { phone: string; name: string | null; wamid: string; content: string; sentAt: string };
-export type MessageStatus = { wamid: string; status: "sent" | "delivered" | "read" | "failed"; at: string };
+export type MessageStatus = { wamid: string; status: "sent" | "delivered" | "read" | "failed"; at: string; errorMessage: string | null };
 export interface WebhookStore {
   saveInbound(message: InboundMessage): Promise<{ inserted: boolean; forwardAllowed: boolean }>;
   saveStatus(status: MessageStatus): Promise<void>;
@@ -40,6 +40,23 @@ export function verifyMetaSignature(body: Uint8Array, header: string | null, sec
 }
 function object(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+// Keep only Meta's diagnostic fields, never the complete receipt or recipient.
+export function deliveryErrorMessage(errors: unknown): string | null {
+  if (!Array.isArray(errors)) return null;
+  const text = errors.slice(0, 5).map((value) => {
+    const error = object(value);
+    const code = typeof error.code === "number" && Number.isSafeInteger(error.code) ? `(#${error.code}) ` : "";
+    const parts = [error.title, error.message, object(error.error_data).details]
+      .filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+    return code + [...new Set(parts.map((item) => item.trim()))].join(" — ");
+  }).filter(Boolean).join("; ")
+    .replace(/EAA[A-Za-z0-9]{16,}/g, "[redacted]")
+    .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[redacted]")
+    .replace(/\bBearer\s+[^\s,;]+/gi, "Bearer [redacted]")
+    .replace(/\b(access_token|app_secret|authorization)\s*[=:]\s*[^\s&;,]+/gi, "$1=[redacted]")
+    .replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 2000);
+  return text || null;
 }
 export function inboundText(message: Record<string, unknown>): string {
   const button = object(message.button); const interactive = object(message.interactive);
@@ -143,7 +160,9 @@ export function createWhatsAppWebhook(config: WebhookConfig, dependencies: Depen
           }
           for (const status of value.statuses ?? []) {
             if (!["sent", "delivered", "read", "failed"].includes(status.status)) continue;
-            await store.saveStatus({ wamid: status.id, status: status.status as MessageStatus["status"], at: new Date(Number(status.timestamp) * 1000).toISOString() });
+            await store.saveStatus({ wamid: status.id, status: status.status as MessageStatus["status"],
+              at: new Date(Number(status.timestamp) * 1000).toISOString(),
+              errorMessage: status.status === "failed" ? deliveryErrorMessage(status.errors) : null });
             statuses++;
           }
         }

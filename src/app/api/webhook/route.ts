@@ -24,8 +24,9 @@ function handler() {
           return { inserted: data.inserted, forwardAllowed: data.forward_allowed };
         },
         async saveStatus(status) {
-          const { error } = await supabase.rpc("record_whatsapp_status", {
+          const { error } = await supabase.rpc("record_whatsapp_status_with_error", {
             p_wamid: status.wamid, p_status: status.status, p_at: status.at,
+            p_error_message: status.errorMessage,
           });
           if (error) throw new Error("status_write_failed");
         },

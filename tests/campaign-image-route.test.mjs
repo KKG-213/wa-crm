@@ -14,7 +14,13 @@ const source = await readFile(new URL('../src/app/api/campaigns/route.ts', impor
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
 
 class Store {
-  writes = []; contacts = []; statuses = new Map();
+  writes = []; contacts = []; statuses = new Map(); rpcCalls = []; deliveryVersion = 1; logError = false;
+  async rpc(name, args) {
+    this.rpcCalls.push({ name, args });
+    if (name === 'whatsapp_delivery_sync_version') return { data: this.deliveryVersion, error: null };
+    if (name === 'finish_whatsapp_campaign') return { data: {}, error: null };
+    throw new Error(`Unexpected RPC ${name}`);
+  }
   from(table) {
     const store = this;
     const query = {
@@ -24,6 +30,7 @@ class Store {
       update(values) { this.operation = 'update'; this.values = values; store.writes.push({ table, operation: 'update', values }); return this; },
       select() { return this; }, eq(_key, value) { this.filter = value; return this; },
       result() {
+        if (table === 'campaign_logs' && store.logError) return { data: null, error: { message: 'Test database failure' } };
         if (table === 'campaigns' && this.operation === 'insert') return { data: { id: 'campaign-test' }, error: null };
         if (table === 'contacts' && this.operation === 'upsert') return { data: store.contacts, error: null };
         if (table === 'contacts' && this.operation === '') return { data: { status: store.statuses.get(this.filter) ?? 'active' }, error: null };
@@ -90,13 +97,29 @@ test('actual campaign route sends the header, deduplicates normalized phones and
   assert.equal(message.media_url, payload.header_image_url); assert.equal(message.status, 'sent');
 });
 
-test('all-failed campaign returns false success, useful error and correct counters', async () => {
+test('all-rejected campaign keeps the useful error and finalizes from persisted logs', async () => {
   const app = harness({ fail: true });
   const response = await app.send(payload); const result = await response.json();
   assert.equal(result.success, false); assert.equal(result.sent, 0); assert.equal(result.failed, 1);
   assert.match(result.first_error, /expected IMAGE/);
-  const campaign = app.store.writes.filter((row) => row.table === 'campaigns' && row.operation === 'update').at(-1).values;
-  assert.equal(campaign.status, 'failed'); assert.equal(campaign.failed_count, 1);
+  const log = app.store.writes.find((row) => row.table === 'campaign_logs').values;
+  assert.equal(log.status, 'failed'); assert.match(log.error_message, /expected IMAGE/);
+  assert.deepEqual(JSON.parse(JSON.stringify(app.store.rpcCalls.at(-1))), { name: 'finish_whatsapp_campaign', args: { p_campaign_id: 'campaign-test' } });
+  assert.equal(app.store.writes.some((row) => row.table === 'campaigns' && 'failed_count' in row.values), false, 'local counts must not overwrite webhook counts');
+});
+
+test('missing delivery migration fails before campaign creation or a Meta send', async () => {
+  const app = harness(); app.store.deliveryVersion = null;
+  const response = await app.send(payload);
+  assert.equal(response.status, 503); assert.match((await response.json()).error, /whatsapp-delivery-errors.sql/);
+  assert.equal(app.store.writes.length, 0); assert.equal(app.requests.length, 0);
+});
+
+test('a database write failure after a send is reported without resending', async () => {
+  const app = harness(); app.store.logError = true;
+  const response = await app.send(payload);
+  assert.equal(response.status, 500); assert.match((await response.json()).error, /Check delivery before retrying/);
+  assert.equal(app.requests.length, 1); assert.equal(app.store.rpcCalls.some((call) => call.name === 'finish_whatsapp_campaign'), false);
 });
 
 test('STOP status recheck still suppresses a contact blocked while the campaign runs', async () => {
