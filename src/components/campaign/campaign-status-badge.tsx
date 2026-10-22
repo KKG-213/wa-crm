@@ -3,6 +3,8 @@ import { Campaign } from "@/types";
 import { campaignDeliveryState } from "@/lib/campaign-delivery";
 
 const configs = {
+  queued: { label: "Recipients queued", className: "bg-blue-500/10 text-blue-500" },
+  review: { label: "Needs review", className: "bg-destructive/10 text-destructive" },
   draft: { label: "Draft", className: "bg-muted text-muted-foreground" },
   running: { label: "Sending", className: "bg-blue-500/10 text-blue-500" },
   pending: { label: "Awaiting delivery", className: "bg-blue-500/10 text-blue-500" },

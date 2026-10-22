@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createHash } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/server";
-import { getApprovedWhatsAppTemplates, sendWhatsAppTemplate } from "@/services/meta";
+import { getApprovedWhatsAppTemplates } from "@/services/meta";
 import { buildTemplateComponents } from "@/lib/meta-template";
 import { normalizeCampaignPhone, validCampaignPhone } from "@/lib/campaign-contacts";
 import { z } from "zod";
 
 const payloadSchema = z.object({
+  request_key: z.string().uuid(),
   campaign_name: z.string().trim().min(2).max(200), template_name: z.string().min(1).max(512),
   template_language: z.string().min(1).max(32), header_image_url: z.string().max(4096).optional(),
   header_values: z.array(z.string().max(1024)).max(20).optional(),
@@ -40,107 +42,23 @@ export async function POST(req: NextRequest) {
     } catch (error) {
       return NextResponse.json({ error: error instanceof Error ? error.message : "Check template parameters" }, { status: 400 });
     }
-    // All format checks finish before a campaign is created or any recipient is sent a message.
-    const { data: deliveryVersion, error: deliverySetupError } = await supabase.rpc("whatsapp_delivery_sync_version");
-    if (deliverySetupError || deliveryVersion !== 1) {
-      return NextResponse.json({ error: "Apply database/whatsapp-delivery-errors.sql before sending campaigns." }, { status: 503 });
+    const { data: queueVersion, error: setupError } = await supabase.rpc("whatsapp_campaign_queue_version");
+    if (setupError || queueVersion !== 1) {
+      return NextResponse.json({ error: "Apply database/whatsapp-campaign-queue.sql before sending campaigns." }, { status: 503 });
     }
-
-    // Create campaign
-    const { data: campaign, error: campaignError } = await supabase
-      .from("campaigns")
-      .insert({
-        name: campaign_name,
-        template_name,
-        template_language,
-        status: "running",
-        total_contacts: contacts.length,
-      })
-      .select()
-      .single();
-
-    if (campaignError || !campaign) {
-      throw new Error(campaignError?.message ?? "Failed to create campaign");
-    }
-
-    // Upsert contacts
-    const { data: upsertedContacts } = await supabase
-      .from("contacts")
-      .upsert(
-        contacts.map((c) => ({ phone: c.phone, name: c.name ?? null, email: c.email ?? null })),
-        { onConflict: "phone", ignoreDuplicates: false }
-      )
-      .select("id, phone, status");
-
-    if (!upsertedContacts?.length) {
-      throw new Error("Failed to upsert contacts");
-    }
-
-    let sentCount = 0;
-    let failedCount = 0;
-    let firstError: string | null = null;
-    const eligibleContacts = upsertedContacts.filter((contact) => contact.status === "active");
-    const skippedCount = upsertedContacts.length - eligibleContacts.length;
-
-    await supabase.from("campaigns").update({ total_contacts: eligibleContacts.length }).eq("id", campaign.id);
-
-    for (const contact of eligibleContacts) {
-      // Recheck immediately before sending so a STOP received during a campaign
-      // suppresses contacts that have not yet been sent a message.
-      const { data: currentContact, error: contactError } = await supabase
-        .from("contacts").select("status").eq("id", contact.id).single();
-      if (contactError) throw new Error("Unable to check contact status");
-      if (currentContact?.status !== "active") continue;
-      const { ok, wamid, error } = await sendWhatsAppTemplate(
-        contact.phone,
-        template_name,
-        template_language,
-        components
-      );
-
-      const { error: logError } = await supabase.from("campaign_logs").insert({
-        campaign_id: campaign.id,
-        contact_id: contact.id,
-        wamid: wamid ?? null,
-        status: ok ? "sent" : "failed",
-        error_message: error ?? null,
-        sent_at: new Date().toISOString(),
-      });
-      if (logError) throw new Error("Message attempted, but its campaign record could not be saved. Check delivery before retrying.");
-
-      const { error: messageError } = await supabase.from("messages").insert({
-        contact_id: contact.id,
-        campaign_id: campaign.id,
-        wamid: wamid ?? null,
-        direction: "outbound",
-        media_url: body.header_image_url || null,
-        content: `📢 ${campaign_name} — Template: ${template_name}`,
-        status: ok ? "sent" : "failed",
-        sent_at: new Date().toISOString(),
-      });
-      if (messageError) throw new Error("Message attempted, but its chat record could not be saved. Check delivery before retrying.");
-
-      if (ok) {
-        sentCount++;
-        await supabase
-          .from("contacts")
-          .update({ last_message_at: new Date().toISOString() })
-          .eq("id", contact.id);
-      } else {
-        failedCount++;
-        firstError ??= error ?? "Meta did not accept this message";
-        console.error("Campaign message send failed");
-      }
-    }
-
-    // Receipts may arrive during the loop. Finalize from persisted logs under
-    // a database lock instead of overwriting delivery failures with local totals.
-    const { error: finishError } = await supabase.rpc("finish_whatsapp_campaign", { p_campaign_id: campaign.id });
-    if (finishError) throw new Error("Messages attempted, but campaign totals could not be finalized. Refresh before retrying.");
-
-    return NextResponse.json({ success: sentCount > 0 && failedCount === 0, campaign_id: campaign.id, sent: sentCount, failed: failedCount,
-      first_error: firstError,
-      skipped: skippedCount + eligibleContacts.length - sentCount - failedCount });
+    const phoneId = process.env.META_PHONE_NUMBER_ID;
+    if (!phoneId || !/^[0-9]{6,32}$/.test(phoneId)) return NextResponse.json({ error: "Meta sender is not configured." }, { status: 503 });
+    const fingerprint = createHash("sha256").update(JSON.stringify({ campaign_name, template_name, template_language,
+      phoneId, components, contacts })).digest("hex");
+    // The request only queues work. A separate authenticated dispatch call sends
+    // one recipient; closing/retrying this POST cannot resend accepted messages.
+    const { data, error } = await supabase.rpc("enqueue_whatsapp_campaign", {
+      p_request_key: body.request_key, p_fingerprint: fingerprint, p_name: campaign_name,
+      p_template: template_name, p_language: template_language, p_phone_number_id: phoneId,
+      p_components: components, p_image_url: body.header_image_url?.trim() || null, p_contacts: contacts,
+    });
+    if (error || !data?.campaign_id) return NextResponse.json({ error: "Could not queue campaign. Check the campaign list before retrying." }, { status: 500 });
+    return NextResponse.json({ success: true, ...data, sent: data.accepted }, { headers: { "Cache-Control": "no-store" } });
   } catch (err) {
     console.error("Campaign error:", err);
     return NextResponse.json(

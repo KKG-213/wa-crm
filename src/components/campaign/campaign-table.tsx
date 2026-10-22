@@ -6,6 +6,8 @@ import { Campaign, CampaignLog } from "@/types";
 import { formatDate } from "@/lib/utils";
 import { CampaignStatusBadge } from "./campaign-status-badge";
 import { Search, RefreshCw } from "lucide-react";
+import { CampaignQueueRunner } from "./campaign-queue-runner";
+import { rateLimitedContactsCsv } from "@/lib/campaign-retry-export";
 
 interface CampaignTableProps {
   campaigns: Campaign[];
@@ -17,6 +19,13 @@ export function CampaignTable({ campaigns }: CampaignTableProps) {
   const [details, setDetails] = useState<{ campaign: Campaign; logs: CampaignLog[] } | null>(null);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [detailsError, setDetailsError] = useState("");
+  const exportRateLimited = () => {
+    const csv = rateLimitedContactsCsv(details?.logs ?? []);
+    if (!csv) return;
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a"); link.href = url; link.download = "rate-limited-recipients.csv";
+    link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
   const loadDetails = async (id: string) => {
     setLoadingDetails(true); setDetailsError(""); setDetails(null);
     try {
@@ -80,6 +89,9 @@ export function CampaignTable({ campaigns }: CampaignTableProps) {
                 <tr key={campaign.id} className="hover:bg-muted/20 transition-colors">
                   <td className="px-4 py-3">
                     <p className="font-medium text-foreground">{campaign.name}</p>
+                    {campaign.queue_enabled && (campaign.queued_count ?? 0) > 0 &&
+                      <div className="mt-2"><CampaignQueueRunner campaignId={campaign.id} /></div>}
+                    {!!campaign.uncertain_count && <p className="text-xs text-destructive mt-1">{campaign.uncertain_count} send(s) need review before retrying.</p>}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground font-mono text-xs">{campaign.template_name}</td>
                   <td className="px-4 py-3 text-right font-medium text-foreground">{campaign.sent_count}</td>
@@ -104,11 +116,18 @@ export function CampaignTable({ campaigns }: CampaignTableProps) {
             <h3 className="text-sm font-semibold">{details.campaign.name} — Delivery details</h3>
             <button type="button" className="text-xs text-muted-foreground hover:underline" onClick={() => setDetails(null)}>Close</button>
           </div>
+          {rateLimitedContactsCsv(details.logs) && <div>
+            <button type="button" className="text-xs text-primary hover:underline" onClick={exportRateLimited}>Export rate-limited recipients</button>
+            <p className="text-xs text-muted-foreground mt-1">Exports only current failed 130429 rows for review. Delivered, pending, uncertain, and 131026 rows are excluded.</p>
+          </div>}
           {details.logs.length === 0 && <p className="text-sm text-muted-foreground">No messages recorded.</p>}
           {details.logs.map((log) => <div key={log.id} className="border border-border rounded-xl p-3 text-sm">
             <p className="font-medium">{log.contact?.name || log.contact?.phone || "Recipient"} · {log.status === "sent" ? "Awaiting delivery" : log.status}</p>
             {log.contact?.name && <p className="text-xs text-muted-foreground mt-1">{log.contact.phone}</p>}
-            {log.status === "failed" && <p className="text-destructive mt-2 break-words">{log.error_message || "No failure reason was recorded for this message."}</p>}
+            {log.status === "failed" && <p className="text-destructive mt-2 break-words">{log.error_message || "No failure reason was recorded for this message."}
+              {log.error_message?.includes("(#131026)") && " Verify the recipient's WhatsApp number before another attempt; the code does not reveal one exact cause."}</p>}
+            {log.status === "uncertain" && <p className="text-destructive mt-2 break-words">{log.error_message || "Acceptance is unknown. Review delivery before retrying."}</p>}
+            {log.status === "skipped" && <p className="text-muted-foreground mt-2">{log.error_message}</p>}
           </div>)}
         </section>}
       </div>

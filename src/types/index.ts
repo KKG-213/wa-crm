@@ -46,6 +46,10 @@ export interface Campaign {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  queue_enabled?: boolean;
+  queued_count?: number;
+  uncertain_count?: number;
+  skipped_count?: number;
 }
 
 export interface CampaignLog {
@@ -53,7 +57,7 @@ export interface CampaignLog {
   campaign_id: string;
   contact_id: string;
   wamid: string | null;
-  status: MessageStatus;
+  status: MessageStatus | "queued" | "sending" | "uncertain" | "skipped";
   error_message: string | null;
   sent_at: string | null;
   delivered_at: string | null;
@@ -92,6 +96,7 @@ export interface WhatsAppTemplate {
 }
 
 export interface SendCampaignPayload {
+  request_key: string;
   campaign_name: string;
   template_name: string;
   template_language: string;

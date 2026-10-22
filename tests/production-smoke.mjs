@@ -42,6 +42,7 @@ try {
     assert.equal((await local(path)).status, 401, `${path} must require login`);
   }
   assert.equal((await local('/api/campaigns', { method: 'POST', body: '{}' })).status, 401);
+  assert.equal((await local('/api/campaigns/00000000-0000-4000-8000-000000000000/dispatch', { method: 'POST', body: '{}' })).status, 401);
   const poster = await local('/whatsapp/web_design_request.png');
   assert.equal(poster.status, 200, 'Meta must reach the poster without a login cookie');
   assert.match(poster.headers.get('content-type'), /image\/png/);

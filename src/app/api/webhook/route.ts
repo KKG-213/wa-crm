@@ -24,7 +24,8 @@ function handler() {
           return { inserted: data.inserted, forwardAllowed: data.forward_allowed };
         },
         async saveStatus(status) {
-          const { error } = await supabase.rpc("record_whatsapp_status_with_error", {
+          const { error } = await supabase.rpc("record_whatsapp_status_with_queue", {
+            p_phone_number_id: process.env.META_PHONE_NUMBER_ID,
             p_wamid: status.wamid, p_status: status.status, p_at: status.at,
             p_error_message: status.errorMessage,
           });

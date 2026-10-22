@@ -103,11 +103,12 @@ export function createMetaClient(config: { accessToken?: string; phoneNumberId?:
       const response = await transport(`${api}/${config.phoneNumberId}/messages`, { method: "POST", headers: headers(),
         body: JSON.stringify(payload), cache: "no-store", redirect: "manual", signal: AbortSignal.timeout(15000) });
       let data;
-      try { data = await response.json(); } catch { return { ok: false, wamid: null, error: `Invalid Meta response (HTTP ${response.status})` }; }
+      try { data = await response.json(); } catch { return { ok: false, wamid: null, error: `Invalid Meta response (HTTP ${response.status})`, uncertain: true }; }
       const wamid = data?.messages?.[0]?.id;
-      if (!response.ok || typeof wamid !== "string" || !wamid) return { ok: false, wamid: null, error: graphError(data, response.status) };
+      if (!response.ok) return { ok: false, wamid: null, error: graphError(data, response.status) };
+      if (typeof wamid !== "string" || !wamid || wamid.length > 512) return { ok: false, wamid: null, error: "Meta acceptance could not be confirmed: missing message ID.", uncertain: true };
       return { ok: true, wamid, error: null };
-    } catch { return { ok: false, wamid: null, error: "Unable to confirm Meta accepted this message. Check the campaign log before retrying." }; }
+    } catch { return { ok: false, wamid: null, error: "Unable to confirm Meta accepted this message. Check the campaign log before retrying.", uncertain: true }; }
   }
   return {
     async templates() {

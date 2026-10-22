@@ -12,6 +12,7 @@ import { buildTemplateComponents, templateRequirements } from "@/lib/meta-templa
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
 import { useRouter } from "next/navigation";
+import { CampaignQueueRunner } from "./campaign-queue-runner";
 
 const schema = z.object({
   campaign_name: z.string().min(2, "Campaign name required"),
@@ -32,7 +33,8 @@ export function CampaignSender() {
   const [step, setStep] = useState<"form" | "preview" | "success">("form");
   const [templates, setTemplates] = useState<WhatsAppTemplate[]>([]);
   const [loadingTemplates, setLoadingTemplates] = useState(false);
-  const [result, setResult] = useState<{ sent: number; failed: number; skipped: number; first_error?: string } | null>(null);
+  const [result, setResult] = useState<{ campaign_id: string; queued: number; sent: number; failed: number; skipped: number; first_error?: string } | null>(null);
+  const requestRef = useRef<{ payload: string; key: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const { register, handleSubmit, watch, setValue, reset, formState: { errors } } = useForm<FormData>({
@@ -130,18 +132,14 @@ export function CampaignSender() {
 
     setSending(true);
     try {
+      const fields = { campaign_name: data.campaign_name, template_name: data.template_name, template_language: data.template_language,
+        header_image_url: data.header_image_url, header_values: data.header_values, body_values: data.body_values, contacts };
+      const signature = JSON.stringify(fields);
+      if (requestRef.current?.payload !== signature) requestRef.current = { payload: signature, key: crypto.randomUUID() };
       const res = await fetch("/api/campaigns", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          campaign_name: data.campaign_name,
-          template_name: data.template_name,
-          template_language: data.template_language,
-          header_image_url: data.header_image_url,
-          header_values: data.header_values,
-          body_values: data.body_values,
-          contacts,
-        }),
+        body: JSON.stringify({ ...fields, request_key: requestRef.current.key }),
       });
 
       const outcome = await res.json();
@@ -149,7 +147,8 @@ export function CampaignSender() {
       setResult(outcome);
       setStep("success");
       router.refresh();
-      if (outcome.failed) toast.error(outcome.first_error ?? `${outcome.failed} messages failed`);
+      if (outcome.queued) toast.success(`${outcome.queued} recipients saved in the sending queue`);
+      else if (outcome.failed) toast.error(outcome.first_error ?? `${outcome.failed} messages failed`);
       else if (outcome.sent) toast.success(`${outcome.sent} messages accepted for sending`);
       else toast.warning("No messages sent. Contacts may be blocked or inactive.");
     } catch (err) {
@@ -161,6 +160,7 @@ export function CampaignSender() {
 
   const handleClose = () => {
     setOpen(false);
+    requestRef.current = null;
     reset();
     setContacts([]);
     setStep("form");
@@ -201,10 +201,11 @@ export function CampaignSender() {
                 <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 ${result?.failed ? "bg-destructive/10" : "bg-primary/10"}`}>
                   {result?.failed ? <X className="w-8 h-8 text-destructive" /> : <CheckCircle2 className="w-8 h-8 text-primary" />}
                 </div>
-                <p className="text-base font-semibold text-foreground">{result?.failed ? "Campaign has failed messages" : "Campaign processed"}</p>
+                <p className="text-base font-semibold text-foreground">{result?.queued ? "Campaign queued" : result?.failed ? "Campaign has failed messages" : "Campaign processed"}</p>
                 <p className="text-sm text-muted-foreground mt-1">Accepted: {result?.sent ?? 0} · Rejected: {result?.failed ?? 0} · Skipped: {result?.skipped ?? 0}</p>
                 {result?.first_error && <p className="text-sm text-destructive mt-3 px-6 break-words">{result.first_error}</p>}
-                <p className="text-xs text-muted-foreground mt-3 px-6 text-center">Acceptance does not confirm delivery. Close this dialog, then use Refresh and View delivery to check WhatsApp receipts.</p>
+                {result?.campaign_id && <div className="mt-4 px-6"><CampaignQueueRunner campaignId={result.campaign_id} autoStart /></div>}
+                <p className="text-xs text-muted-foreground mt-3 px-6 text-center">Keep this dialog open while sending. You can resume saved recipients with Send remaining in the campaign list. Check View delivery for final receipts.</p>
               </div>
             ) : (
               <form onSubmit={handleSubmit(onSubmit)} className="p-6 space-y-5">

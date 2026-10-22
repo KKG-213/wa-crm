@@ -3,10 +3,14 @@ type DeliveryCounts = {
   total_contacts: number;
   delivered_count: number;
   failed_count: number;
+  queued_count?: number;
+  uncertain_count?: number;
 };
 
 // Database status describes the send job. These labels describe delivery.
 export function campaignDeliveryState(campaign: DeliveryCounts) {
+  if ((campaign.uncertain_count ?? 0) > 0) return "review";
+  if ((campaign.queued_count ?? 0) > 0) return "queued";
   if (campaign.status === "draft") return "draft";
   if (campaign.status === "running") return "running";
   if (campaign.total_contacts === 0) return campaign.status === "failed" ? "failed" : "empty";

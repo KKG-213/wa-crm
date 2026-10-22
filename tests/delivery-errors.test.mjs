@@ -56,8 +56,8 @@ test('the actual signed webhook route passes error diagnostics to the new databa
     headers: { 'x-hub-signature-256': signature } }));
   assert.equal((await send('sha256=invalid')).status, 401); assert.equal(calls.length, 0);
   assert.equal((await send(webhook.signMetaBody(payload, secret))).status, 200);
-  assert.equal(calls.length, 2); assert.equal(calls[0][0], 'record_whatsapp_status_with_error');
-  assert.deepEqual(JSON.parse(JSON.stringify(calls[0][1])), { p_wamid: 'wamid.failed.test', p_status: 'failed',
+  assert.equal(calls.length, 2); assert.equal(calls[0][0], 'record_whatsapp_status_with_queue');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0][1])), { p_phone_number_id: 'test-phone', p_wamid: 'wamid.failed.test', p_status: 'failed',
     p_at: '2026-10-10T09:20:00.000Z', p_error_message: webhook.deliveryErrorMessage(errors) });
   assert.equal(calls[1][1].p_error_message, null);
 });
