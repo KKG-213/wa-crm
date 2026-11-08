@@ -29,19 +29,29 @@ export default function LoginPage() {
 
   const onSubmit = async (data: FormData) => {
     setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({
-      email: data.email,
-      password: data.password,
-    });
 
-    if (error) {
-      toast.error(error.message);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: data.email,
+        password: data.password,
+      });
+
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
+
+      router.push("/dashboard");
+      router.refresh();
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Login failed. Check your Supabase configuration and try again.";
+      toast.error(message);
+    } finally {
       setLoading(false);
-      return;
     }
-
-    router.push("/dashboard");
-    router.refresh();
   };
 
   return (

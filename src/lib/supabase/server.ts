@@ -1,14 +1,13 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+import { getSupabaseConfig } from "./env";
 
 export async function createClient() {
   const cookieStore = await cookies();
+  const { url, anonKey } = getSupabaseConfig();
 
-  return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
+  return createServerClient(url, anonKey, {
       cookies: {
         getAll() {
           return cookieStore.getAll();
@@ -36,8 +35,14 @@ export async function createAdminClient() {
 // Stateless server credential: browser cookies must not override service-role auth.
 // The public webhook uses this only after its raw-body signature is verified.
 export function createServiceRoleClient() {
-  return createSupabaseClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } },
-  );
+  const { url } = getSupabaseConfig();
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+
+  if (!serviceRoleKey) {
+    throw new Error(
+      "Supabase service role key is missing. Add SUPABASE_SERVICE_ROLE_KEY to .env.local."
+    );
+  }
+
+  return createSupabaseClient(url, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
 }
