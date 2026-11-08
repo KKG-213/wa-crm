@@ -3,9 +3,9 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { getSupabaseConfig } from './lib/supabase/env';
 
 export async function middleware(request: NextRequest) {
-  // These exact endpoints authenticate signed raw bodies, not browser cookies.
-  // Each handler verifies its own signature before creating a service client.
-  if (['/api/webhook', '/api/hermes/outbound'].includes(request.nextUrl.pathname)) return NextResponse.next();
+  // These exact endpoints authenticate signatures or the worker bearer secret.
+  // Each handler verifies its credential before creating a service client.
+  if (['/api/webhook', '/api/hermes/outbound', '/api/campaigns/worker'].includes(request.nextUrl.pathname)) return NextResponse.next();
   let supabaseResponse = NextResponse.next({ request });
   const { url, anonKey } = getSupabaseConfig();
 
