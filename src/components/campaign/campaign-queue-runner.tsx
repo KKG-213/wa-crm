@@ -25,6 +25,11 @@ export function CampaignQueueRunner({ campaignId, autoStart = false }: { campaig
         if (result.state === "done") {
           setFinished(true); setRunning(false); setNotice("Sending finished. Check delivery receipts for final outcomes."); return;
         }
+        if (result.state === "paused" && result.retry_at && Number.isFinite(Date.parse(result.retry_at))) {
+          setNotice(`Meta rate limit: waiting until ${new Date(result.retry_at).toLocaleString()}. Sending will resume automatically while this page stays open.`);
+          timer = setTimeout(tick, Math.min(60000, Math.max(1000, Date.parse(result.retry_at) - Date.now())));
+          return;
+        }
         if (result.state === "paused" || result.state === "review") {
           setNotice(result.message + (result.retry_at ? ` Resume after ${new Date(result.retry_at).toLocaleString()}.` : ""));
           setRunning(false); return;

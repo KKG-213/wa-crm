@@ -13,7 +13,7 @@ const child = spawn(process.execPath, ['node_modules/next/dist/bin/next', 'start
   env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1', NEXT_PUBLIC_SUPABASE_URL: 'https://example.supabase.co',
     NEXT_PUBLIC_SUPABASE_ANON_KEY: 'test-only-anon', SUPABASE_SERVICE_ROLE_KEY: 'test-only-service',
     META_ACCESS_TOKEN: 'test-only-access', META_APP_SECRET: secret, META_VERIFY_TOKEN: 'smoke-verify',
-    META_WABA_ID: 'smoke-waba', META_PHONE_NUMBER_ID: 'smoke-phone', HERMES_WEBHOOK_URL: '' },
+    META_WABA_ID: 'smoke-waba', META_PHONE_NUMBER_ID: 'smoke-phone', HERMES_WEBHOOK_URL: '', CRON_SECRET: 'worker-smoke-secret-that-is-at-least-32-chars', CAMPAIGN_WORKER_IDS: '' },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let output = '';
@@ -43,6 +43,11 @@ try {
   }
   assert.equal((await local('/api/campaigns', { method: 'POST', body: '{}' })).status, 401);
   assert.equal((await local('/api/campaigns/00000000-0000-4000-8000-000000000000/dispatch', { method: 'POST', body: '{}' })).status, 401);
+  assert.equal((await local('/api/campaigns/worker')).status, 401);
+  assert.equal((await local('/api/campaigns/worker', { headers: { authorization: 'Bearer wrong' } })).status, 401);
+  const worker = await local('/api/campaigns/worker', { headers: { authorization: 'Bearer worker-smoke-secret-that-is-at-least-32-chars' } });
+  assert.equal(worker.status, 200);
+  assert.equal((await worker.json()).state, 'disabled');
   const poster = await local('/whatsapp/web_design_request.png');
   assert.equal(poster.status, 200, 'Meta must reach the poster without a login cookie');
   assert.match(poster.headers.get('content-type'), /image\/png/);
